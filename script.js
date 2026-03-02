@@ -56,9 +56,18 @@ function resetColors() {
       if (seat) {
         seat.style.backgroundColor = '';
         seat.style.color = '';
-        if (seat.dataset.state === 'active') seat.querySelector('.group-name').innerText = '';
-        if (seat.dataset.state === 'absent') seat.querySelector('.group-name').innerText = '休';
-        if (seat.dataset.state === 'space') seat.querySelector('.group-name').innerText = '✖';
+        if (seat.dataset.state === 'active') {
+          seat.querySelector('.group-name').innerText = '';
+          seat.className = 'seat';
+        }
+        if (seat.dataset.state === 'absent') {
+          seat.querySelector('.group-name').innerText = '休';
+          seat.className = 'seat absent';
+        }
+        if (seat.dataset.state === 'space') {
+          seat.querySelector('.group-name').innerText = '✖';
+          seat.className = 'seat space';
+        }
         seat.querySelector('.seat-count').innerText = '';
       }
     }
@@ -113,24 +122,24 @@ function getGroupSizes(totalPeople, target) {
   return sizes.sort((a, b) => b - a); 
 }
 
-// 理想の形（枠）からはみ出していないかを判定し、ペナルティを返す関数
-function calculateShapePenalty(targetSize, width, height) {
+// 理想の形かを判定する関数（移動なしの場合はペナルティを緩める）
+function calculateShapePenalty(targetSize, width, height, allowMovement) {
   let penalty = 0;
+  // 移動なしの場合は形が崩れるのを許容するため、ペナルティを10分の1にする
+  let multiplier = allowMovement ? 1 : 0.1; 
+
   if (targetSize <= 4) {
-    // 4人以下は 2x2 の枠内に絶対収める
-    if (width > 2 || height > 2) penalty += 2000;
+    if (width > 2 || height > 2) penalty += 2000 * multiplier;
   } else if (targetSize === 5 || targetSize === 6) {
-    // 5〜6人は 2x3 か 3x2 の枠内に収める
-    if (width > 3 || height > 3) penalty += 2000; // 4列以上は一発アウト
-    if (width > 2 && height > 2) penalty += 2000; // 3x3のような四角形もアウト（どちらかは2以下）
+    if (width > 3 || height > 3) penalty += 2000 * multiplier;
+    if (width > 2 && height > 2) penalty += 2000 * multiplier;
   } else {
-    // 7人以上の場合は極端に細長くならないようにする
-    if (width > 4 || height > 4) penalty += 2000;
+    if (width > 4 || height > 4) penalty += 2000 * multiplier;
   }
   return penalty;
 }
 
-function generateSingleAttempt(cornerWeightFn, groupSizes, availableDesks) {
+function generateSingleAttempt(cornerWeightFn, groupSizes, availableDesks, allowMovement) {
   let unassigned = new Set(availableDesks);
   let groups = [];
 
@@ -189,17 +198,16 @@ function generateSingleAttempt(cornerWeightFn, groupSizes, availableDesks) {
           minR = Math.min(minR, m.r); maxR = Math.max(maxR, m.r);
           minC = Math.min(minC, m.c); maxC = Math.max(maxC, m.c);
         }
-        let width = maxC - minC + 1;
-        let height = maxR - minR + 1;
+        let width = Math.max(maxC, cand.c) - Math.min(minC, cand.c) + 1;
+        let height = Math.max(maxR, cand.r) - Math.min(minR, cand.r) + 1;
         
-        let shapePenalty = calculateShapePenalty(targetSize, width, height);
+        let shapePenalty = calculateShapePenalty(targetSize, width, height, allowMovement);
 
         let connections = 0;
         for (let m of currentGroup) {
           if (Math.abs(cand.r - m.r) + Math.abs(cand.c - m.c) === 1) connections++;
         }
         
-        // 接地面が多いほどプラス、理想の形から外れるほど特大マイナス
         let score = (connections * 20) - shapePenalty;
         
         if (score > bestCandScore) {
@@ -216,7 +224,7 @@ function generateSingleAttempt(cornerWeightFn, groupSizes, availableDesks) {
   return { groups: groups, unused: Array.from(unassigned) };
 }
 
-function evaluateGroups(groups) {
+function evaluateGroups(groups, allowMovement) {
   let score = 0;
   for (let g of groups) {
     if (!isConnected(g)) score -= 5000; 
@@ -234,10 +242,10 @@ function evaluateGroups(groups) {
     let height = maxR - minR + 1;
     
     let targetSize = g.length;
-    let shapePenalty = calculateShapePenalty(targetSize, width, height);
+    let shapePenalty = calculateShapePenalty(targetSize, width, height, allowMovement);
 
     score += edges * 10;
-    score -= shapePenalty; // 全体評価でも形の綺麗さを重視
+    score -= shapePenalty; 
   }
   return score;
 }
@@ -245,6 +253,7 @@ function evaluateGroups(groups) {
 function generateGroups() {
   resetColors();
   const targetSize = parseInt(document.getElementById('group-size').value);
+  const allowMovement = document.getElementById('allow-movement').checked;
   seatMapGlobal.clear();
   
   let availableDesks = [];
@@ -256,10 +265,14 @@ function generateGroups() {
       if (seatDiv && seatDiv.dataset.state !== 'space') {
         let seatObj = { r, c, id: `${r}-${c}`, element: seatDiv, state: seatDiv.dataset.state };
         seatMapGlobal.set(seatObj.id, seatObj);
-        availableDesks.push(seatObj);
         
         if (seatObj.state === 'active') {
+          // 人がいる席は無条件で追加
+          availableDesks.push(seatObj);
           totalPeople++;
+        } else if (seatObj.state === 'absent' && allowMovement) {
+          // 席移動OKの場合のみ、欠席の机も利用可能とする
+          availableDesks.push(seatObj);
         }
       }
     }
@@ -284,8 +297,8 @@ function generateGroups() {
   let bestScore = -Infinity;
 
   for (let cornerFn of corners) {
-    let result = generateSingleAttempt(cornerFn, groupSizes, availableDesks);
-    let score = evaluateGroups(result.groups);
+    let result = generateSingleAttempt(cornerFn, groupSizes, availableDesks, allowMovement);
+    let score = evaluateGroups(result.groups, allowMovement);
     
     if (score > bestScore) {
       bestScore = score;
@@ -311,11 +324,14 @@ function generateGroups() {
     });
   });
 
+  // 使われなかった席の処理（移動OKの場合のみ発生）
   bestUnused.forEach(seat => {
-    seat.element.style.backgroundColor = '#ddd';
-    seat.element.style.color = '#888';
-    seat.element.querySelector('.group-name').innerText = '空';
-    seat.element.querySelector('.seat-count').innerText = '';
+    if (allowMovement) {
+      seat.element.style.backgroundColor = '#ddd';
+      seat.element.style.color = '#888';
+      seat.element.querySelector('.group-name').innerText = '空';
+      seat.element.querySelector('.seat-count').innerText = '';
+    }
   });
 }
 
