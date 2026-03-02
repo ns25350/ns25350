@@ -23,10 +23,9 @@ function createMap() {
       const seat = document.createElement('div');
       seat.className = 'seat';
       seat.id = `${r}-${c}`;
-      seat.dataset.state = 'active'; // 初期状態は通常
+      seat.dataset.state = 'active'; 
       seat.innerHTML = `<span class="group-name"></span><span class="seat-count"></span>`;
       
-      // クリックで3状態をループ切り替え
       seat.onclick = () => {
         let state = seat.dataset.state;
         if (state === 'active') {
@@ -99,7 +98,6 @@ function isConnected(nodes) {
   return visited.size === nodes.length;
 }
 
-// 人数から、最適なグループ分割（配列）を計算する
 function getGroupSizes(totalPeople, target) {
   if (totalPeople === 0) return [];
   let numGroups = Math.round(totalPeople / target);
@@ -112,7 +110,24 @@ function getGroupSizes(totalPeople, target) {
   for (let i = 0; i < numGroups; i++) {
     sizes.push(i < remainder ? baseSize + 1 : baseSize);
   }
-  return sizes.sort((a, b) => b - a); // 大きいグループから処理するため降順
+  return sizes.sort((a, b) => b - a); 
+}
+
+// 理想の形（枠）からはみ出していないかを判定し、ペナルティを返す関数
+function calculateShapePenalty(targetSize, width, height) {
+  let penalty = 0;
+  if (targetSize <= 4) {
+    // 4人以下は 2x2 の枠内に絶対収める
+    if (width > 2 || height > 2) penalty += 2000;
+  } else if (targetSize === 5 || targetSize === 6) {
+    // 5〜6人は 2x3 か 3x2 の枠内に収める
+    if (width > 3 || height > 3) penalty += 2000; // 4列以上は一発アウト
+    if (width > 2 && height > 2) penalty += 2000; // 3x3のような四角形もアウト（どちらかは2以下）
+  } else {
+    // 7人以上の場合は極端に細長くならないようにする
+    if (width > 4 || height > 4) penalty += 2000;
+  }
+  return penalty;
 }
 
 function generateSingleAttempt(cornerWeightFn, groupSizes, availableDesks) {
@@ -123,7 +138,6 @@ function generateSingleAttempt(cornerWeightFn, groupSizes, availableDesks) {
     let bestSeed = null;
     let minVal = Infinity;
 
-    // 孤立しやすい席 ＆ 指定の隅からスタート
     for (let seat of unassigned) {
       let nbsCount = getNeighbors(seat, unassigned).length;
       let cVal = cornerWeightFn(seat.r, seat.c);
@@ -145,7 +159,6 @@ function generateSingleAttempt(cornerWeightFn, groupSizes, availableDesks) {
         getNeighbors(member, unassigned).forEach(n => candidates.add(n));
       }
 
-      // 孤立してしまった場合のフォールバック（一番近い席を無理やり繋げる）
       if (candidates.size === 0) {
         let bestFallback = null;
         let minDist = Infinity;
@@ -171,7 +184,6 @@ function generateSingleAttempt(cornerWeightFn, groupSizes, availableDesks) {
       let bestCandScore = -Infinity;
 
       for (let cand of candidates) {
-        // 正方形（四角形）に近づけるための計算
         let minR = cand.r, maxR = cand.r, minC = cand.c, maxC = cand.c;
         for (let m of currentGroup) {
           minR = Math.min(minR, m.r); maxR = Math.max(maxR, m.r);
@@ -179,16 +191,16 @@ function generateSingleAttempt(cornerWeightFn, groupSizes, availableDesks) {
         }
         let width = maxC - minC + 1;
         let height = maxR - minR + 1;
-        let area = width * height; // 囲む面積（スカスカだと広くなる）
-        let squareness = Math.abs(width - height); // 縦横比の差（小さいほど正方形）
+        
+        let shapePenalty = calculateShapePenalty(targetSize, width, height);
 
         let connections = 0;
         for (let m of currentGroup) {
           if (Math.abs(cand.r - m.r) + Math.abs(cand.c - m.c) === 1) connections++;
         }
         
-        // 面積が狭く、縦横比が1:1に近く、接地面が多いものを高く評価
-        let score = (connections * 20) - (area * 5) - (squareness * 10);
+        // 接地面が多いほどプラス、理想の形から外れるほど特大マイナス
+        let score = (connections * 20) - shapePenalty;
         
         if (score > bestCandScore) {
           bestCandScore = score;
@@ -220,12 +232,12 @@ function evaluateGroups(groups) {
     }
     let width = maxC - minC + 1;
     let height = maxR - minR + 1;
-    let area = width * height;
-    let squareness = Math.abs(width - height);
+    
+    let targetSize = g.length;
+    let shapePenalty = calculateShapePenalty(targetSize, width, height);
 
     score += edges * 10;
-    score -= area * 5; 
-    score -= squareness * 10; 
+    score -= shapePenalty; // 全体評価でも形の綺麗さを重視
   }
   return score;
 }
@@ -247,7 +259,7 @@ function generateGroups() {
         availableDesks.push(seatObj);
         
         if (seatObj.state === 'active') {
-          totalPeople++; // 実際にいる人間の数をカウント
+          totalPeople++;
         }
       }
     }
@@ -258,7 +270,6 @@ function generateGroups() {
     return;
   }
 
-  // 実際にいる人間の数から、最適なグループ構成を割り出す
   let groupSizes = getGroupSizes(totalPeople, targetSize);
 
   const corners = [
@@ -289,10 +300,9 @@ function generateGroups() {
     '#85E3FF', '#B9F2FF', '#F3FFE3', '#FFABAB', '#C4FAF8'
   ];
   
-  // グループの色塗り
   bestGroups.forEach((group, index) => {
     let color = colors[index % colors.length];
-    let groupSize = group.length; // この机の塊に座る人数
+    let groupSize = group.length; 
     group.forEach((seat) => {
       seat.element.style.backgroundColor = color;
       seat.element.style.color = '#333';
@@ -301,7 +311,6 @@ function generateGroups() {
     });
   });
 
-  // 欠席パズルによってはじき出された「最終的な空き席」の表示
   bestUnused.forEach(seat => {
     seat.element.style.backgroundColor = '#ddd';
     seat.element.style.color = '#888';
