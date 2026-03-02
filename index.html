@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>座席グループ分けツール (改良版)</title>
+<title>座席グループ分けツールVer1.3</title>
 <style>
   body {
     font-family: sans-serif;
@@ -32,6 +32,7 @@
     border-radius: 4px;
     cursor: pointer;
     font-weight: bold;
+    margin-right: 5px;
   }
   button:hover {
     background-color: #0056b3;
@@ -53,11 +54,11 @@
     border: 1px solid #aaa;
     border-radius: 4px;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     user-select: none;
-    font-size: 14px;
     font-weight: bold;
     transition: background-color 0.2s;
   }
@@ -68,7 +69,13 @@
     background-color: #555 !important;
     color: #fff !important;
     border-color: #333;
-    text-decoration: line-through;
+  }
+  .group-name {
+    font-size: 14px;
+  }
+  .seat-count {
+    font-size: 10px;
+    color: #555;
   }
 </style>
 </head>
@@ -84,7 +91,8 @@
     </div>
     <hr>
     <div class="control-group">
-      <label>1グループの人数: <span id="group-size-val">4</span>人</label><br>
+      <label>目標の人数: <span id="group-size-val">4</span>人</label>
+      <span style="font-size: 0.9em; color: #666; margin-left: 10px;">※孤立を防ぐため、実際の人数は自動調整されます</span><br>
       <input type="range" id="group-size" min="2" max="8" value="4" oninput="updateSliderValue(this.value)">
     </div>
     <button onclick="generateGroups()" style="background-color: #28a745;">グループ分けを実行</button>
@@ -120,9 +128,11 @@
         const seat = document.createElement('div');
         seat.className = 'seat';
         seat.id = `seat-${r}-${c}`;
+        seat.innerHTML = `<span class="group-name"></span><span class="seat-count"></span>`;
         seat.onclick = () => {
           seat.classList.toggle('absent');
-          seat.innerText = seat.classList.contains('absent') ? '✖' : '';
+          seat.querySelector('.group-name').innerText = seat.classList.contains('absent') ? '✖' : '';
+          seat.querySelector('.seat-count').innerText = '';
           seat.style.backgroundColor = ''; 
         };
         mapDiv.appendChild(seat);
@@ -135,81 +145,157 @@
     seats.forEach(seat => {
       seat.style.backgroundColor = '';
       seat.style.color = '#000';
-      seat.innerText = '';
+      seat.querySelector('.group-name').innerText = '';
+      seat.querySelector('.seat-count').innerText = '';
     });
   }
 
   function generateGroups() {
     resetColors();
-    const groupSize = parseInt(document.getElementById('group-size').value);
-    let availableSeats = [];
+    const targetSize = parseInt(document.getElementById('group-size').value);
     
+    // 「目標3人なら最小3人」「目標4人以上なら最小(目標-1)人」を許容ラインとする
+    const minSize = targetSize >= 4 ? targetSize - 1 : targetSize; 
+
+    let seatMap = new Map();
+    let unassigned = new Set();
+    
+    // 欠席以外の席をマップに登録
     for (let r = 0; r < currentRows; r++) {
       for (let c = 0; c < currentCols; c++) {
         const seatDiv = document.getElementById(`seat-${r}-${c}`);
         if (seatDiv && !seatDiv.classList.contains('absent')) {
-          availableSeats.push({ r, c, element: seatDiv });
+          let seatObj = { r, c, id: `${r}-${c}`, element: seatDiv };
+          seatMap.set(seatObj.id, seatObj);
+          unassigned.add(seatObj);
         }
       }
     }
 
-    if (availableSeats.length === 0) {
+    if (unassigned.size === 0) {
       alert("有効な席がありません。");
       return;
     }
 
-    let groups = [];
-    let unassigned = [...availableSeats];
-
-    while (unassigned.length > 0) {
-      // 最初の1人を一番左上の空席から選ぶ
-      let firstSeat = unassigned.shift();
-      let currentGroup = [firstSeat];
-      
-      while (currentGroup.length < groupSize && unassigned.length > 0) {
-        // グループの「中心（重心）」を計算
-        let sumR = 0, sumC = 0;
-        for (let member of currentGroup) {
-          sumR += member.r;
-          sumC += member.c;
+    // 上下左右の隣接席を取得する関数
+    function getNeighbors(seat, targetSet) {
+      let neighbors = [];
+      let dirs = [[-1,0], [1,0], [0,-1], [0,1]]; // 上,下,左,右
+      for (let [dr, dc] of dirs) {
+        let id = `${seat.r + dr}-${seat.c + dc}`;
+        if (seatMap.has(id)) {
+          let s = seatMap.get(id);
+          if (targetSet.has(s)) neighbors.push(s);
         }
-        let centroidR = sumR / currentGroup.length;
-        let centroidC = sumC / currentGroup.length;
+      }
+      return neighbors;
+    }
 
-        // 残りの席を評価
-        let candidates = unassigned.map(seat => {
-          // グループの誰かからマス目上で何個離れているか（隣接判定用）
-          let minManhattan = Infinity;
+    let groups = [];
+
+    // フェーズ1：隣接する席をくっつけていく（四角くまとめる）
+    while (unassigned.size > 0) {
+      // 残された席が少なく孤立しそうな「端っこ」の席からスタートする
+      let bestStart = null;
+      let minNeighbors = Infinity;
+      for (let seat of unassigned) {
+        let count = getNeighbors(seat, unassigned).length;
+        if (count < minNeighbors) {
+          minNeighbors = count;
+          bestStart = seat;
+        }
+      }
+
+      let currentGroup = [bestStart];
+      unassigned.delete(bestStart);
+
+      // 目標人数に達するか、周りに空き席がなくなるまで拡張
+      while (currentGroup.length < targetSize) {
+        let candidateSet = new Set();
+        for (let member of currentGroup) {
+          let nbs = getNeighbors(member, unassigned);
+          nbs.forEach(n => candidateSet.add(n));
+        }
+
+        if (candidateSet.size === 0) break; // 周りが欠席や他のグループで塞がれた場合
+
+        let candidates = Array.from(candidateSet);
+        let centroidR = currentGroup.reduce((sum, s) => sum + s.r, 0) / currentGroup.length;
+        let centroidC = currentGroup.reduce((sum, s) => sum + s.c, 0) / currentGroup.length;
+
+        // 候補席の評価：グループと接している辺が多いほど（四角になりやすい）高評価
+        candidates.forEach(cand => {
+          let connections = 0;
           for (let member of currentGroup) {
-            let dist = Math.abs(seat.r - member.r) + Math.abs(seat.c - member.c);
-            if (dist < minManhattan) minManhattan = dist;
+            if (Math.abs(cand.r - member.r) + Math.abs(cand.c - member.c) === 1) {
+              connections++;
+            }
           }
-          // グループの中心からの距離（まとまりやすくするため）
-          let distToCentroid = Math.pow(seat.r - centroidR, 2) + Math.pow(seat.c - centroidC, 2);
-          
-          return { seat, minManhattan, distToCentroid };
+          cand.connections = connections;
+          cand.distToCentroid = Math.pow(cand.r - centroidR, 2) + Math.pow(cand.c - centroidC, 2);
         });
 
-        // 優先度をつけて並び替え：
-        // 1. まず「隣り合っているか」を最優先（欠席を飛び越えない）
-        // 2. 隣接度が同じなら、「グループの中心に近いか」を優先（一列にならない）
+        // 1. 接する辺の数が多い順 2. 重心に近い順 に並び替え
         candidates.sort((a, b) => {
-          if (a.minManhattan !== b.minManhattan) {
-            return a.minManhattan - b.minManhattan;
-          }
+          if (b.connections !== a.connections) return b.connections - a.connections;
           return a.distToCentroid - b.distToCentroid;
         });
 
-        // 最も条件に合う席を追加
-        let bestSeat = candidates[0].seat;
-        currentGroup.push(bestSeat);
-        
-        // 選ばれた席を未割り当てリストから削除
-        unassigned = unassigned.filter(s => s !== bestSeat);
+        let bestCand = candidates[0];
+        currentGroup.push(bestCand);
+        unassigned.delete(bestCand);
       }
-      
       groups.push(currentGroup);
     }
+
+    // フェーズ2：小さすぎるグループ（孤立した席）を隣のグループに吸収させる
+    let seatToGroupIdx = new Map();
+    groups.forEach((g, i) => g.forEach(s => seatToGroupIdx.set(s.id, i)));
+
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let i = 0; i < groups.length; i++) {
+        let group = groups[i];
+        if (!group || group.length === 0) continue;
+
+        // 許容人数（minSize）未満のグループを見つけたら
+        if (group.length < minSize) {
+          let neighborGroups = new Set();
+          for (let seat of group) {
+            let dirs = [[-1,0], [1,0], [0,-1], [0,1]];
+            for (let [dr, dc] of dirs) {
+              let id = `${seat.r + dr}-${seat.c + dc}`;
+              if (seatToGroupIdx.has(id)) {
+                let adjIdx = seatToGroupIdx.get(id);
+                if (adjIdx !== i) neighborGroups.add(adjIdx);
+              }
+            }
+          }
+
+          // 隣接するグループがあれば、一番人数の少ないグループに合流（吸収）する
+          if (neighborGroups.size > 0) {
+            let bestAdj = -1;
+            let minAdjSize = Infinity;
+            for (let adjIdx of neighborGroups) {
+              if (groups[adjIdx] && groups[adjIdx].length < minAdjSize) {
+                minAdjSize = groups[adjIdx].length;
+                bestAdj = adjIdx;
+              }
+            }
+
+            groups[bestAdj].push(...group);
+            group.forEach(s => seatToGroupIdx.set(s.id, bestAdj));
+            groups[i] = []; // グループを空にする
+            changed = true;
+            break; // 配列が変化したので最初からチェックし直す
+          }
+        }
+      }
+    }
+
+    // 空になったグループを削除
+    groups = groups.filter(g => g.length > 0);
 
     const colors = [
       '#FFB3BA', '#FFDFBA', '#FFFFBA', '#BAFFC9', '#BAE1FF', 
@@ -217,12 +303,16 @@
       '#85E3FF', '#B9F2FF', '#F3FFE3', '#FFABAB', '#C4FAF8'
     ];
     
+    // 画面に色と名前を描画
     groups.forEach((group, index) => {
       let color = colors[index % colors.length];
+      let groupSize = group.length;
       group.forEach((seat) => {
         seat.element.style.backgroundColor = color;
         seat.element.style.color = '#333';
-        seat.element.innerText = `G${index + 1}`;
+        seat.element.querySelector('.group-name').innerText = `G${index + 1}`;
+        // グループが何人編成になったか小さく表示（確認用）
+        seat.element.querySelector('.seat-count').innerText = `(${groupSize}人)`;
       });
     });
   }
