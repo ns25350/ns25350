@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>座席グループ分けツール</title>
+<title>座席グループ分けツール (改良版)</title>
 <style>
   body {
     font-family: sans-serif;
@@ -37,7 +37,6 @@
     background-color: #0056b3;
   }
   
-  /* 座席表のスタイル */
   #seat-map {
     display: inline-grid;
     gap: 5px;
@@ -65,7 +64,6 @@
   .seat:hover {
     filter: brightness(0.9);
   }
-  /* 欠席・空席のスタイル */
   .seat.absent {
     background-color: #555 !important;
     color: #fff !important;
@@ -101,12 +99,10 @@
   let currentRows = 0;
   let currentCols = 0;
 
-  // スライダーの値表示を更新
   function updateSliderValue(val) {
     document.getElementById('group-size-val').innerText = val;
   }
 
-  // 座席表を作成する
   function createMap() {
     const rows = parseInt(document.getElementById('rows').value);
     const cols = parseInt(document.getElementById('cols').value);
@@ -116,7 +112,6 @@
     currentCols = cols;
     
     mapDiv.innerHTML = '';
-    // CSS Gridを使用して行列を設定
     mapDiv.style.gridTemplateColumns = `repeat(${cols}, 50px)`;
     mapDiv.style.gridTemplateRows = `repeat(${rows}, 50px)`;
 
@@ -125,18 +120,16 @@
         const seat = document.createElement('div');
         seat.className = 'seat';
         seat.id = `seat-${r}-${c}`;
-        // 席をクリックしたときの処理（欠席・空席の切り替え）
         seat.onclick = () => {
           seat.classList.toggle('absent');
           seat.innerText = seat.classList.contains('absent') ? '✖' : '';
-          seat.style.backgroundColor = ''; // 色をリセット
+          seat.style.backgroundColor = ''; 
         };
         mapDiv.appendChild(seat);
       }
     }
   }
 
-  // グループ分けの色をリセット
   function resetColors() {
     const seats = document.querySelectorAll('.seat:not(.absent)');
     seats.forEach(seat => {
@@ -146,13 +139,11 @@
     });
   }
 
-  // グループ分けを実行
   function generateGroups() {
     resetColors();
     const groupSize = parseInt(document.getElementById('group-size').value);
     let availableSeats = [];
     
-    // 有効な（欠席ではない）席をすべて取得
     for (let r = 0; r < currentRows; r++) {
       for (let c = 0; c < currentCols; c++) {
         const seatDiv = document.getElementById(`seat-${r}-${c}`);
@@ -170,38 +161,65 @@
     let groups = [];
     let unassigned = [...availableSeats];
 
-    // 近い席をまとめるアルゴリズム（貪欲法）
     while (unassigned.length > 0) {
-      // まだグループになっていない一番左上の席を基準にする
-      let centerSeat = unassigned.shift();
-      let currentGroup = [centerSeat];
+      // 最初の1人を一番左上の空席から選ぶ
+      let firstSeat = unassigned.shift();
+      let currentGroup = [firstSeat];
       
-      // 残りの席を、基準の席からの「直線距離」が近い順に並び替え
-      unassigned.sort((a, b) => {
-        let distA = Math.pow(a.r - centerSeat.r, 2) + Math.pow(a.c - centerSeat.c, 2);
-        let distB = Math.pow(b.r - centerSeat.r, 2) + Math.pow(b.c - centerSeat.c, 2);
-        return distA - distB;
-      });
+      while (currentGroup.length < groupSize && unassigned.length > 0) {
+        // グループの「中心（重心）」を計算
+        let sumR = 0, sumC = 0;
+        for (let member of currentGroup) {
+          sumR += member.r;
+          sumC += member.c;
+        }
+        let centroidR = sumR / currentGroup.length;
+        let centroidC = sumC / currentGroup.length;
 
-      // スライダーで設定した人数から、基準の1人を引いた人数分を取得
-      let needed = groupSize - 1;
-      let picked = unassigned.splice(0, needed);
-      currentGroup.push(...picked);
+        // 残りの席を評価
+        let candidates = unassigned.map(seat => {
+          // グループの誰かからマス目上で何個離れているか（隣接判定用）
+          let minManhattan = Infinity;
+          for (let member of currentGroup) {
+            let dist = Math.abs(seat.r - member.r) + Math.abs(seat.c - member.c);
+            if (dist < minManhattan) minManhattan = dist;
+          }
+          // グループの中心からの距離（まとまりやすくするため）
+          let distToCentroid = Math.pow(seat.r - centroidR, 2) + Math.pow(seat.c - centroidC, 2);
+          
+          return { seat, minManhattan, distToCentroid };
+        });
+
+        // 優先度をつけて並び替え：
+        // 1. まず「隣り合っているか」を最優先（欠席を飛び越えない）
+        // 2. 隣接度が同じなら、「グループの中心に近いか」を優先（一列にならない）
+        candidates.sort((a, b) => {
+          if (a.minManhattan !== b.minManhattan) {
+            return a.minManhattan - b.minManhattan;
+          }
+          return a.distToCentroid - b.distToCentroid;
+        });
+
+        // 最も条件に合う席を追加
+        let bestSeat = candidates[0].seat;
+        currentGroup.push(bestSeat);
+        
+        // 選ばれた席を未割り当てリストから削除
+        unassigned = unassigned.filter(s => s !== bestSeat);
+      }
       
       groups.push(currentGroup);
     }
 
-    // グループごとに色分けするパレット
     const colors = [
       '#FFB3BA', '#FFDFBA', '#FFFFBA', '#BAFFC9', '#BAE1FF', 
       '#E8BAFF', '#FFBAE1', '#E2F0CB', '#FFC8A2', '#D5AAFF',
       '#85E3FF', '#B9F2FF', '#F3FFE3', '#FFABAB', '#C4FAF8'
     ];
     
-    // 結果を画面に反映する
     groups.forEach((group, index) => {
       let color = colors[index % colors.length];
-      group.forEach((seat, seatIndex) => {
+      group.forEach((seat) => {
         seat.element.style.backgroundColor = color;
         seat.element.style.color = '#333';
         seat.element.innerText = `G${index + 1}`;
@@ -209,7 +227,6 @@
     });
   }
 
-  // 初期化時に6x6の表を作成しておく
   window.onload = createMap;
 </script>
 </body>
