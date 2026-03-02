@@ -22,6 +22,16 @@
       <span style="font-size: 0.9em; color: #666; margin-left: 10px;">※目標人数から ±1人 の範囲内で自動調整します</span><br>
       <input type="range" id="group-size" min="2" max="8" value="4" oninput="updateSliderValue(this.value)">
     </div>
+    
+    <div class="control-group" style="margin-top: 15px; margin-bottom: 15px;">
+      <label style="cursor: pointer; font-weight: bold; color: #333;">
+        <input type="checkbox" id="allow-movement" checked style="transform: scale(1.2); margin-right: 5px;">
+        欠席席を移動させて、グループの形を正方形に近づける
+      </label>
+      <div style="font-size: 0.85em; color: #666; margin-left: 25px; margin-top: 3px;">
+        ※チェックを外すと、欠席の机はそのままの位置に固定され、それを避けるようにグループが作られます（形は少し崩れます）。
+      </div>
+    </div>
     <button onclick="generateGroups()" class="btn-generate">グループ分けを実行</button>
     <button onclick="resetColors()" class="btn-reset">色をリセット</button>
   </div>
